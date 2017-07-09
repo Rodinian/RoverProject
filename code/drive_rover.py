@@ -45,16 +45,18 @@ class RoverState():
         self.yaw = None # Current yaw angle
         self.pitch = None # Current pitch angle
         self.roll = None # Current roll angle
-        self.vel = None # Current velocity
+        self.vel = 0 # Current velocity
         self.steer = 0 # Current steering angle
         self.throttle = 0 # Current throttle value
         self.brake = 0 # Current brake value
-        self.nav_angles = None # Angles of navigable terrain pixels
-        self.nav_dists = None # Distances of navigable terrain pixels
+        self.nav_angles = 0 # Angles of navigable terrain pixels
+        self.nav_dists = 0 # Distances of navigable terrain pixels
         self.ground_truth = ground_truth_3d # Ground truth worldmap
         self.mode = 'forward' # Current mode (can be forward or stop)
         self.throttle_set = 0.2 # Throttle setting when accelerating
         self.brake_set = 10 # Brake setting when braking
+        self.zeroVelCount = 0 # counter for ensure the cart is stoped
+        self.expYaw =0
         # The stop_forward and go_forward fields below represent total count
         # of navigable terrain pixels.  This is a very crude form of knowing
         # when you can keep going and when you should stop.  Feel free to
@@ -76,6 +78,84 @@ class RoverState():
         self.near_sample = 0 # Will be set to telemetry value data["near_sample"]
         self.picking_up = 0 # Will be set to telemetry value data["picking_up"]
         self.send_pickup = False # Set to True to trigger rock pickup
+        self.currentState = RoverState.exploring
+        self.nextState = RoverState.exploring
+        self.currentState.run(self)
+    def runAll(self):
+        self.currentState = self.nextState(i)
+        self.currentState.run(self)
+        self.currentState.next(self)
+
+
+# Actually, I am used to state machine in my daily work, so I translate into that way
+class State:
+    def run(self):
+        assert 0, "run not implemented"
+    def next(self, input):
+        assert 0, "next not implemented"
+	
+class StateMachine:
+    def __init__(self, initialState):
+        self.currentState = initialState
+        self.currentState.run()
+    # Template method:
+    def runAll(self, inputs):
+        for i in inputs:
+            print(i)
+            self.currentState = self.currentState.next(i)
+            self.currentState.run()
+
+class Exploring(State):
+    def run(self,Rover):
+        # Check the extent of navigable terrain
+        # If mode is forward, navigable terrain looks good 
+        # and velocity is below max, then throttle 
+        # Set throttle value to throttle setting
+        Rover.exp_Vel = np.clip(Rover.nav_dists**2/200,0,2.0)
+        Rover.throttle = 0.1*(Rover.exp_Vel - Rover.vel)
+        Rover.throttle = np.clip(Rover.throttle,0,0.2)
+        Rover.brake = 0
+        # Set steering to average angle clipped to the range +/- 15
+        offset = 15
+        Rover.steer = np.clip(np.mean(Rover.nav_angles * 180/np.pi)+offset, -8, 8) #need a offset here to do the wall crawling
+        # If there's a lack of navigable terrain pixels then go to 'stop' mode
+        return Rover
+    def next(self, Rover):
+        if Rover.nav_dists**2 >= Rover.stop_forward:
+            Rover.nextState = RoverState.exploring
+        elif Rover.nav_dists**2 < Rover.stop_forward:
+            # Set mode to "stop" and hit the brakes!
+            Rover.nextState =  RoverState.unstuck
+        elif Rover.zeroVelCount > 1000 :
+            # Set mode to "stop" and hit the brakes!
+            Rover.nextState =  RoverState.unstuck
+        return Rover
+
+		
+class Unstuck(State):
+    def run(self,Rover):
+        # Do something to unstuck
+        Rover.exp_Vel = 0
+        Rover.throttle = 0.1*(Rover.exp_Vel - Rover.vel)
+        Rover.throttle = np.clip(Rover.throttle,-0.2,0.2)
+        Rover.brake = 0
+        # Set steering to average angle clipped to the range +/- 15
+        offset = 15
+        Rover.steer = np.clip(-15, -8, 8) #need a offset here to do the wall crawling
+        # If there's a lack of navigable terrain pixels then go to 'stop' mode
+
+    def next(self, Rover):
+        if Rover.nav_dists**2 >= Rover.stop_forward:
+            Rover.nextState = RoverState.exploring
+            Rover.zeroVelCount = 0
+        else:
+            Rover.nextState = RoverState.Unstuck
+        return Rover
+
+		
+# Static variable initialization:
+RoverState.exploring = Exploring()
+RoverState.unstuck = Unstuck()
 # Initialize our rover 
 Rover = RoverState()
 
@@ -104,12 +184,18 @@ def telemetry(sid, data):
         global Rover
         # Initialize / update Rover with current telemetry
         Rover, image = update_rover(Rover, data)
+		#if the Rover stop, then take a count
+        if Rover.vel < 0.3:
+            Rover.zeroVelCount+= 1
+        if Rover.vel >0.5:
+            Rover.zeroVelCount = 0
 
         if np.isfinite(Rover.vel):
 
             # Execute the perception and decision steps to update the Rover's state
             Rover = perception_step(Rover)
-            Rover = decision_step(Rover)
+            Rover.runAll()
+            #Rover = decision_step(Rover)
 
             # Create output images to send to server
             out_image_string1, out_image_string2 = create_output_images(Rover)

@@ -81,6 +81,14 @@ def translate_pix(xpix_rot, ypix_rot, xpos, ypos, scale):
     ypix_translated = (ypix_rot / scale) + ypos
     # Return the result  
     return xpix_translated, ypix_translated
+def throwUpHalf(img):
+	width,height,depth = img.shape
+	for i in range(1,depth):
+		for j in range(1,width):
+			for k in range(height/2,height):
+				img[j,k,i] = 0
+				
+	return img
 
 # Define a function to apply rotation and translation (and clipping)
 # Once you define the two functions above this function should work
@@ -128,7 +136,7 @@ def perception_step(Rover):
         # Example: Rover.worldmap[obstacle_y_world, obstacle_x_world, 0] += 1
         #          Rover.worldmap[rock_y_world, rock_x_world, 1] += 1
         #          Rover.worldmap[navigable_y_world, navigable_x_world, 2] += 1
-
+    Rover.img = throwUpHalf(Rover.img)
     navigable, obstacle, sampleRocks = color_thresh(Rover.img)
     warped_navigable = perspect_transform(navigable,source, destination)
     warped_obstacle = perspect_transform(obstacle,source, destination)
